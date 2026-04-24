@@ -34,7 +34,8 @@ def ask_to_save(track_name, artist_name):
         return False
 
 def track_spotify():
-    last_track_id = None
+    prev_track_info = None
+    active_id = None
 
     print("--- Librarian Active ---")
 
@@ -50,19 +51,28 @@ def track_spotify():
                 artist_name = current_track['item']['artists'][0]['name']
 
                 # Check if song has changed, print new info if triggered
-                if track_id != last_track_id:
-                    print(f"🎵 Now Playing: {track_name} by {artist_name}")
-                    last_track_id = track_id
+                if track_id != active_id:
+                    # Check if we have a song that just ended
+                    if prev_track_info is not None:                       
+                        print(f"🏁 Finished: {prev_track_info['name']}")
+                        
+                        # Trigger popup for the previous song
+                        user_wants_to_save = ask_to_save(prev_track_info['name'], prev_track_info['artist'])
 
-                    # Load popup to see if the user wants to save the song
-                    user_wants_to_save = ask_to_save(track_name, artist_name)
+                        if user_wants_to_save:
+                            print(f"✅ Saving to playlist: {prev_track_info['name']}")
+
+                    # Update the info to the song that just started
+                    print(f"🎧 Playing: {track_name} by {artist_name}")
                     
-                    if user_wants_to_save:
-                        print(f"✅ User confirmed: Saving {track_name}...")
-                    else:
-                        print(f"⏭️ User ignored or timed out.")
+                    prev_track_info = {
+                        'id': track_id,
+                        'name': track_name,
+                        'artist': artist_name
+                    }
+                    active_id = track_id
 
-            #Wait 5 seconds before asking again
+            # Wait 5 seconds before asking again
             time.sleep(5)
 
         except Exception as e:
