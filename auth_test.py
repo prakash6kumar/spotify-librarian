@@ -6,7 +6,7 @@ from spotipy.oauth2 import SpotifyOAuth
 load_dotenv()
 
 # Pull URI from .env file
-scope = "user-read-currently-playing playlist-modify-public"
+scope = "user-read-currently-playing playlist-read-private playlist-modify-private playlist-modify-public"
 client_id = os.getenv('SPOTIPY_CLIENT_ID')
 client_secret = os.getenv('SPOTIPY_CLIENT_SECRET')
 redirect_uri = os.getenv('SPOTIPY_REDIRECT_URI')
