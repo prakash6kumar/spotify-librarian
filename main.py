@@ -4,6 +4,8 @@ from dotenv import load_dotenv
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 import subprocess
+import select
+import sys
 
 load_dotenv()
 
@@ -23,12 +25,12 @@ sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
 def get_or_create_playlist(sp):
     playlist_name = "The Librarian"
 
-    # 1. Get the current user's profile info
+    # Get the current user's profile info
     user_profile = sp.current_user()
     user_id = user_profile['id']
     print(f"DEBUG: Attempting to check playlists for User ID: {user_id}")
 
-    # 2. Check existing playlists
+    # Check existing playlists
     playlists = sp.current_user_playlists()
 
     for playlist in playlists['items']:
@@ -36,7 +38,7 @@ def get_or_create_playlist(sp):
             print(f"DEBUG: Found existing playlist: {playlist['id']}")
             return playlist['id']
     
-    # 3. If not found, create it
+    # If not found, create it
     try:
         print(f"✨ Creating new playlist: {playlist_name}...")
         # Use the modern /me/playlists endpoint instead of /users/{user_id}/playlists
@@ -52,26 +54,20 @@ def get_or_create_playlist(sp):
         raise e
 
 def ask_to_save(track_name, artist_name):
-    # AppleScript command to create a 10-second popup
-    script = f'''
-    display dialog "Save '{track_name}' by {artist_name} to your Librarian playlist?" ¬
-    with title "Spotify Librarian" ¬
-    buttons {{"Ignore", "Save to Playlist"}} ¬
-    default button "Save to Playlist" ¬
-    giving up after 10
-    '''
-
-    try:
-        # Use subprocess to run the AppleScript from Python
-        result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
-        
-        # Check what the user clicked
-        if "button returned:Save to Playlist" in result.stdout:
+    print(f"\n{'='*60}")
+    print(f"🎵 Save '{track_name}' by {artist_name}?")
+    print(f"{'='*60}")
+    print(f"Press 's' to SAVE or any other key to IGNORE (auto-ignore in 8 seconds)")
+    
+    # Wait for input with timeout
+    i, o, e = select.select([sys.stdin], [], [], 8)
+    
+    if i:
+        response = sys.stdin.readline().strip().lower()
+        if response == 's':
             return True
-        return False
-    except Exception as e:
-        print(f"UI Error: {e}")
-        return False
+    
+    return False
 
 def track_spotify():
     # Intialize playlist ID
@@ -79,6 +75,8 @@ def track_spotify():
 
     prev_track_info = None
     active_id = None
+    asked_track_ids = set()  # Track which songs we've already asked about
+    last_popup_time = 0  # Track when we last showed a popup
 
     print("--- Librarian Active ---")
 
@@ -95,30 +93,53 @@ def track_spotify():
 
                 # Check if song has changed, print new info if triggered
                 if track_id != active_id:
+                    print(f"🔄 Track change detected: {active_id} → {track_id}")
                     # Check if we have a song that just ended
                     if prev_track_info is not None:                       
-                        print(f"🏁 Finished: {prev_track_info['name']}")
+                        print(f"🏁 Finished: {prev_track_info['name']} (ID: {prev_track_info['id']})")
                         
-                        # Trigger popup for the previous song
-                        user_wants_to_save = ask_to_save(prev_track_info['name'], prev_track_info['artist'])
-
-                        if user_wants_to_save:
-                            print(f"✅ Saving to playlist: {prev_track_info['name']}")
-    
-                            # Fetch current items in the playlist
-                            results = sp.playlist_items(target_playlist_id)
-                            # Extract the IDs from the complex Spotify dictionary
-                            existing_ids = []
-                            for item in results['items']:
-                                if item and item.get('track') and item['track'].get('id'):
-                                    existing_ids.append(item['track']['id'])
-
-                            # Add the song into the playlist if ID is not found
-                            if prev_track_info['id'] not in existing_ids:
-                                sp.playlist_add_items(target_playlist_id, [prev_track_info['id']])
-                                print(f"🚀 Successfully added {prev_track_info['name']} to The Librarian.")
+                        # Only ask if we haven't asked about this track before
+                        if prev_track_info['id'] not in asked_track_ids:
+                            # Check if enough time has passed since last popup (prevent spam)
+                            current_time = time.time()
+                            time_since_last_popup = current_time - last_popup_time
+                            
+                            if time_since_last_popup < 10:
+                                print(f"⏸️  Popup cooldown active ({int(10 - time_since_last_popup)}s remaining) - skipping {prev_track_info['name']}")
                             else:
-                                print(f"ℹ️ {prev_track_info['name']} is already in The Librarian.")
+                                print(f"💬 Showing popup for: {prev_track_info['name']}")
+                                # Mark this track as asked
+                                asked_track_ids.add(prev_track_info['id'])
+                                
+                                # Trigger popup for the previous song
+                                user_wants_to_save = ask_to_save(prev_track_info['name'], prev_track_info['artist'])
+                                last_popup_time = time.time()  # Update the last popup time
+                                print(f"📝 User response: {'Save' if user_wants_to_save else 'Ignore'}")
+
+                                if user_wants_to_save:
+                                    print(f"✅ Checking if {prev_track_info['name']} is already in playlist...")
+            
+                                    # Fetch current items in the playlist
+                                    results = sp.playlist_items(target_playlist_id)
+                                    
+                                    # Extract the IDs from the complex Spotify dictionary
+                                    existing_ids = []
+                                    for playlist_item in results['items']:
+                                        if playlist_item and playlist_item.get('item') and playlist_item['item'].get('id'):
+                                            existing_ids.append(playlist_item['item']['id'])
+                                    
+                                    print(f"🔍 Track ID: {prev_track_info['id']}")
+                                    print(f"🔍 Playlist has {len(existing_ids)} tracks")
+                                    print(f"🔍 Track in playlist: {prev_track_info['id'] in existing_ids}")
+
+                                    # Add the song into the playlist if ID is not found
+                                    if prev_track_info['id'] not in existing_ids:
+                                        print(f"➕ Adding to Spotify API...")
+                                        sp.playlist_add_items(target_playlist_id, [prev_track_info['id']])
+                                        print(f"🚀 Successfully added {prev_track_info['name']} to The Librarian.")
+                                    else:
+                                        print(f"⏭️ Skipping - {prev_track_info['name']} is already in The Librarian.")
+                                        print(f"⏭️ NOT calling Spotify API to add this track.")
 
                     # Update the info to the song that just started
                     print(f"🎧 Playing: {track_name} by {artist_name}")
